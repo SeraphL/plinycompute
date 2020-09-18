@@ -55,6 +55,16 @@ elseif(CMAKE_BUILD_TYPE MATCHES UNIT_TESTS)
     # in the unit tests the minimum page size will be set to 8 bytes so that they can execute fast
     add_definitions(-DMIN_PAGE_SIZE=8)
 
+# if we are compiling for Shangyu's test
+elseif(CMAKE_BUILD_TYPE MATCHES Shangyu-test)
+
+    # do -O3 and set the instruction set to the native one for this machine
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -march=native")
+    set(CMAKE_EXE_LINKER_FLAGS  "${CMAKE_EXE_LINKER_FLAGS} -rdynamic -ldl" )
+    set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -rdynamic -ldl")
+    set(CMAKE_MODULE_LINKER_FLAGS "${CMAKE_MODULE_LINKER_FLAGS} -rdynamic -ldl")
+    target_compile_definitions(FFAggBlockToRowStrip PRIVATE -DBLOCK_TO_ROW_STRIP) 
+
 endif ()
 
 #set (CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -fsanitize=thread -fPIE -g")
