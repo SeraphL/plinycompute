@@ -36,7 +36,7 @@ class FFMatrixBlock : public pdb::Object {
    * @param numRows - the number of rows the block has
    * @param numCols - the number of columns the block has
    */
-  FFMatrixBlock(uint32_t rowID, uint32_t colID, uint32_t numRows, uint32_t numCols) {
+  FFMatrixBlock(int32_t rowID, int32_t colID, uint32_t numRows, uint32_t numCols) {
     metaData = makeObject<FFMatrixMeta>(rowID, colID),
         data = makeObject<FFMatrixData>(numRows, numCols, rowID, colID);
   }
@@ -81,11 +81,11 @@ class FFMatrixBlock : public pdb::Object {
     return *data;
   }
 
-  uint32_t getRowID() {
+  int32_t getRowID() {
     return metaData->rowID;
   }
 
-  uint32_t getColID() {
+  int32_t getColID() {
     return metaData->colID;
   }
 

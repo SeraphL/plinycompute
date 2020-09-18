@@ -13,6 +13,11 @@
 #include "sharedLibraries/headers/FFGradientJoin.h"
 #include "sharedLibraries/headers/FFUpdateJoin.h"
 #include "sharedLibraries/headers/FFJoinBackMultTranspose.h"
+#include "sharedLibraries/headers/FFAggBlockToRowStrip.h"
+#include "sharedLibraries/headers/FFAggBlockToColStrip.h"
+#include "sharedLibraries/headers/FFSingleToBlock.h"
+#include "sharedLibraries/headers/FFSingleToRow.h"
+#include "sharedLibraries/headers/FFSingleToCol.h"
 
 using namespace pdb;
 
@@ -532,6 +537,54 @@ auto init_weights(pdb::PDBClient &pdbClient) {
   }
 }
 
+void write_out_block(pdb::PDBStorageIteratorPtr<ff::FFMatrixBlock> &it) {
+
+  // grab the iterator
+  //auto it = pdbClient.getSetIterator<ff::FFMatrixBlock>("ff", "w2_updated");
+  int32_t count = 0;
+  while (it->hasNextRecord()) {
+
+    // grab the record
+    auto r = it->getNextRecord();
+    count++;
+
+    std::cout << "(" << r->getRowID() << ", " << r->getColID() << ")\n";
+    // write out the values
+    float *values = r->data->data->c_ptr();
+    for (int i = 0; i < r->data->numRows; ++i) {
+      for (int j = 0; j < r->data->numCols; ++j) {
+        std::cout << values[i * r->data->numCols + j] << ", ";
+      }
+      std::cout << "\n";
+    }
+
+    if(r->data->bias != nullptr) {
+
+      //  
+      std::cout << "Bias\n";
+      for (int j = 0; j < r->data->bias->size(); ++j) {
+        std::cout << (r->data->bias->c_ptr())[j] << ", "; 
+      } 
+      std::cout << "\n";
+    }
+
+    if(r->metaData != nullptr) {
+    	std::cout << "Meta\n";
+	std::cout << "RowID: " << r->metaData->rowID << "\n";
+	std::cout << "ColID: " << r->metaData->colID << "\n";
+    }
+
+    std::cout << "finished record" << count << "\n";
+    std::cout << "\n\n"; 
+  } 
+    
+  // wait a bit before the shutdown
+  sleep(4); 
+    
+  std::cout << count << '\n';
+
+}
+
 int main(int argc, char *argv[]) {
 
   // make a client
@@ -552,6 +605,11 @@ int main(int argc, char *argv[]) {
   pdbClient.registerType("libraries/libFFMatrixWriter.so");
   pdbClient.registerType("libraries/libFFSelectionGradient2.so");
   pdbClient.registerType("libraries/libFFUpdateJoin.so");
+  pdbClient.registerType("libraries/libFFAggBlockToRowStrip.so");
+  pdbClient.registerType("libraries/libFFAggBlockToColStrip.so");
+  pdbClient.registerType("libraries/libFFSingleToBlock.so");
+  pdbClient.registerType("libraries/libFFSingleToRow.so");
+  pdbClient.registerType("libraries/libFFSingleToCol.so");
 
 
   // now, create a new database
@@ -573,10 +631,22 @@ int main(int argc, char *argv[]) {
   pdbClient.createSet<ff::FFMatrixBlock>("ff", "w1_updated"); // OK
   pdbClient.createSet<ff::FFMatrixBlock>("ff", "w2_updated"); // OK
 
+  pdbClient.createSet<ff::FFMatrixBlock>("ff", "agg_block_strip"); // OK
+  pdbClient.createSet<ff::FFMatrixBlock>("ff", "agg_block_strip_to_col"); // OK
+  pdbClient.createSet<ff::FFMatrixBlock>("ff", "single_single_multiply"); // OK
+  pdbClient.createSet<ff::FFMatrixBlock>("ff", "block_block_multiply"); // OK
+  pdbClient.createSet<ff::FFMatrixBlock>("ff", "row_col_multiply"); // OK
+  pdbClient.createSet<ff::FFMatrixBlock>("ff", "col_row_multiply"); // OK
+  pdbClient.createSet<ff::FFMatrixBlock>("ff", "single_to_block"); // OK
+  pdbClient.createSet<ff::FFMatrixBlock>("ff", "single_to_row_strip"); // OK
+  pdbClient.createSet<ff::FFMatrixBlock>("ff", "single_to_col_strip"); // OK
+
   // should we genrate the data
   bool shouldGenerate;
   std::cout << "Should generate data : \n";
   std::cin >> shouldGenerate;
+
+  uint32_t whichTest = 0;
 
   if(shouldGenerate) {
 
@@ -603,6 +673,9 @@ int main(int argc, char *argv[]) {
 
     std::cout << "embedding_block : \n";
     std::cin >> embedding_block;
+
+    std::cout << "which test : \n";
+    std::cin >> whichTest;
 
     // generate the input data
     generate_input_data(pdbClient);
@@ -634,6 +707,629 @@ int main(int argc, char *argv[]) {
   init_weights(pdbClient);
 
   std::chrono::steady_clock::time_point planner_begin = std::chrono::steady_clock::now();
+
+  // test the aggregate
+  std::chrono::steady_clock::time_point stage_begin_1 = std::chrono::steady_clock::now();
+  {
+    const UseTemporaryAllocationBlock tempBlock{1024 * 1024 * 128};
+
+    std::cout << "write out the weight matrix: \n";
+
+    auto it = pdbClient.getSetIterator<ff::FFMatrixBlock>("ff", "w1");
+
+    write_out_block(it);
+
+  
+    // make the computation
+    Handle<Computation> readB = makeObject<ff::FFMatrixScanner>("ff", "w1");
+
+    // (1) Test the single-to-block
+    if (whichTest == 0) {
+
+	    Handle<Computation> selection = makeObject<ff::FFSingleToBlock>(2, 3);
+	    selection->setInput(readB);
+
+	    // make the writer
+	    Handle<Computation> myWriter = makeObject<ff::FFMatrixWriter>("ff", "single_to_block");
+	    myWriter->setInput(selection);
+
+	    // run the computation
+	    bool success = pdbClient.executeComputations({myWriter});
+
+	    // grab the iterator
+
+	    std::cout << "write out the single-to-block matrix: \n";
+
+	    auto it2 = pdbClient.getSetIterator<ff::FFMatrixBlock>("ff", "single_to_block");
+
+	    write_out_block(it2);
+
+	    std::chrono::steady_clock::time_point stage_end_1 = std::chrono::steady_clock::now();
+	    std::cout << "Run single-to-block for " << std::chrono::duration_cast<std::chrono::nanoseconds>(stage_end_1 - stage_begin_1).count() << "[ns]" << '\n';
+
+	    pdbClient.removeSet("ff", "w1");
+	    pdbClient.removeSet("ff", "single_to_block");
+
+	    return 0;
+    }
+
+    // (2) Test the single-to-row-strip
+    else if (whichTest == 1) {
+
+	    Handle<Computation> selection = makeObject<ff::FFSingleToRow>(2);
+	    selection->setInput(readB);
+
+	    // make the writer
+	    Handle<Computation> myWriter = makeObject<ff::FFMatrixWriter>("ff", "single_to_row_strip");
+	    myWriter->setInput(selection);
+
+	    // run the computation
+	    bool success = pdbClient.executeComputations({myWriter});
+
+	    // grab the iterator
+
+	    std::cout << "write out the single-to-row-strip matrix: \n";
+
+	    auto it2 = pdbClient.getSetIterator<ff::FFMatrixBlock>("ff", "single_to_row_strip");
+
+	    write_out_block(it2);
+
+	    std::chrono::steady_clock::time_point stage_end_1 = std::chrono::steady_clock::now();
+	    std::cout << "Run single-to-row-strip for " << std::chrono::duration_cast<std::chrono::nanoseconds>(stage_end_1 - stage_begin_1).count() << "[ns]" << '\n';
+
+	    pdbClient.removeSet("ff", "w1");
+	    pdbClient.removeSet("ff", "single_to_row_strip");
+
+	    return 0;
+    }
+
+    // (3) Test the single-to-col-strip
+    else if (whichTest == 2) {
+
+	    Handle<Computation> selection = makeObject<ff::FFSingleToCol>(3);
+	    selection->setInput(readB);
+
+	    // make the writer
+	    Handle<Computation> myWriter = makeObject<ff::FFMatrixWriter>("ff", "single_to_col_strip");
+	    myWriter->setInput(selection);
+
+	    // run the computation
+	    bool success = pdbClient.executeComputations({myWriter});
+
+	    // grab the iterator
+
+	    std::cout << "write out the single-to-col-strip matrix: \n";
+
+	    auto it2 = pdbClient.getSetIterator<ff::FFMatrixBlock>("ff", "single_to_col_strip");
+
+	    write_out_block(it2);
+
+	    std::chrono::steady_clock::time_point stage_end_1 = std::chrono::steady_clock::now();
+	    std::cout << "Run single-to-col-strip for " << std::chrono::duration_cast<std::chrono::nanoseconds>(stage_end_1 - stage_begin_1).count() << "[ns]" << '\n';
+
+	    pdbClient.removeSet("ff", "w1");
+	    pdbClient.removeSet("ff", "single_to_col_strip");
+
+	    return 0;
+    }
+
+    // BEGIN TESTING THE MULTIPLICATION
+    // (4) Test the single x single
+    else if (whichTest == 3) {
+
+  	    pdbClient.createSet<ff::FFMatrixBlock>("ff", "single_single_multiply"); // OK
+
+	    // make the computation
+	    Handle<Computation> readA = makeObject<ff::FFMatrixScanner>("ff", "input_batch");
+	    //Handle<Computation> readB = makeObject<ff::FFMatrixScanner>("ff", "w1");
+
+	    // make the join
+	    Handle<Computation> join = makeObject<ff::FFInputLayerJoin>();
+	    join->setInput(0, readA);
+	    join->setInput(1, readB);
+
+	    // make the writer
+	    Handle<Computation> myWriter = makeObject<ff::FFMatrixWriter>("ff", "single_single_multiply");
+	    myWriter->setInput(join);
+
+	    // run the computation
+	    bool success = pdbClient.executeComputations({myWriter});
+
+	    // grab the iterator
+
+	    std::cout << "write out the multiply matrix: \n";
+
+	    auto it2 = pdbClient.getSetIterator<ff::FFMatrixBlock>("ff", "single_single_multiply");
+
+	    write_out_block(it2);
+
+            std::chrono::steady_clock::time_point stage_end_1 = std::chrono::steady_clock::now();
+            std::cout << "Run single-single multiply for " << std::chrono::duration_cast<std::chrono::nanoseconds>(stage_end_1 - stage_begin_1).count() << "[ns]" << '\n';
+
+	    pdbClient.removeSet("ff", "input_batch");
+            pdbClient.removeSet("ff", "w1");
+            pdbClient.removeSet("ff", "single_single_multiply");
+
+	    return 0;
+    }
+
+    // (5) Test the block x block
+    else if (whichTest == 4) {
+
+	    // make the computation
+	    Handle<Computation> readA = makeObject<ff::FFMatrixScanner>("ff", "input_batch");
+	    //Handle<Computation> readB = makeObject<ff::FFMatrixScanner>("ff", "w1");
+	    
+	    // make the join
+	    Handle<Computation> join = makeObject<ff::FFInputLayerJoin>();
+	    join->setInput(0, readA);
+	    join->setInput(1, readB);
+	    
+	    // make the aggregation
+	    Handle<Computation> myAggregation = makeObject<ff::FFAggMatrix>();
+	    myAggregation->setInput(join);
+	    
+	    // make the writer
+	    Handle<Computation> myWriter = makeObject<ff::FFMatrixWriter>("ff", "block_block_multiply");
+	    myWriter->setInput(myAggregation);
+	    //myWriter->setInput(join);
+	    
+	    // run the computation
+	    bool success = pdbClient.executeComputations({myWriter});
+	  
+	    // grab the iterator
+	  
+	    std::cout << "write out the multiply matrix: \n";
+	  
+	    auto it2 = pdbClient.getSetIterator<ff::FFMatrixBlock>("ff", "block_block_multiply");
+	  
+	    write_out_block(it2);
+
+            std::chrono::steady_clock::time_point stage_end_1 = std::chrono::steady_clock::now();
+            std::cout << "Run block-block multiply for " << std::chrono::duration_cast<std::chrono::nanoseconds>(stage_end_1 - stage_begin_1).count() << "[ns]" << '\n';
+
+            pdbClient.removeSet("ff", "input_batch");
+            pdbClient.removeSet("ff", "w1");
+            pdbClient.removeSet("ff", "block_block_multiply");
+	  
+	    return 0;
+    }
+
+
+	/*
+    // (5) Test the row-strip x col-strip
+    else if (whichTest == 4) {
+
+  	    pdbClient.createSet<ff::FFMatrixBlock>("ff", "row_strip_col_strip_multiply"); // OK
+
+	    // make the computation
+	    Handle<Computation> readA = makeObject<ff::FFMatrixScanner>("ff", "input_batch");
+	    //Handle<Computation> readB = makeObject<ff::FFMatrixScanner>("ff", "w1");
+
+	    // make the join
+	    Handle<Computation> join = makeObject<ff::FFInputLayerJoin>();
+	    join->setInput(0, readA);
+	    join->setInput(1, readB);
+
+	    // make the writer
+	    Handle<Computation> myWriter = makeObject<ff::FFMatrixWriter>("ff", "row_strip_col_strip_multiply");
+	    myWriter->setInput(join);
+
+	    // run the computation
+	    bool success = pdbClient.executeComputations({myWriter});
+
+	    // grab the iterator
+
+	    std::cout << "write out the multiply matrix: \n";
+
+	    auto it2 = pdbClient.getSetIterator<ff::FFMatrixBlock>("ff", "row_strip_col_strip_multiply");
+
+	    write_out_block(it2);
+
+            std::chrono::steady_clock::time_point stage_end_1 = std::chrono::steady_clock::now();
+            std::cout << "Run row-strip-col-strip multiply for " << std::chrono::duration_cast<std::chrono::nanoseconds>(stage_end_1 - stage_begin_1).count() << "[ns]" << '\n';
+
+	    pdbClient.removeSet("ff", "input_batch");
+            pdbClient.removeSet("ff", "w1");
+            pdbClient.removeSet("ff", "row_strip_col_strip_multiply");
+
+	    return 0;
+    }
+
+    // (6) Test the col-strip x row-strip
+    else if (whichTest == 5) {
+
+	    // make the computation
+	    Handle<Computation> readA = makeObject<ff::FFMatrixScanner>("ff", "agg_block_strip_to_col");
+	    Handle<Computation> readB = makeObject<ff::FFMatrixScanner>("ff", "agg_block_strip");
+	    
+	    // make the join
+	    Handle<Computation> join = makeObject<ff::FFInputLayerJoin>();
+	    join->setInput(0, readA);
+	    join->setInput(1, readB);
+	    
+	    // make the aggregation
+	    Handle<Computation> myAggregation = makeObject<ff::FFAggMatrix>();
+	    myAggregation->setInput(join);
+	    
+	    // make the writer
+	    Handle<Computation> myWriter = makeObject<ff::FFMatrixWriter>("ff", "col_row_multiply");
+	    myWriter->setInput(myAggregation);
+	    //myWriter->setInput(join);
+	    
+	    // run the computation
+	    bool success = pdbClient.executeComputations({myWriter});
+	  
+	    // grab the iterator
+	  
+	    std::cout << "write out the multiply matrix: \n";
+	  
+	    auto it2 = pdbClient.getSetIterator<ff::FFMatrixBlock>("ff", "col_row_multiply");
+	  
+	    write_out_block(it2);
+	  
+	    return 0;
+    }
+	*/
+
+
+  }
+  std::chrono::steady_clock::time_point stage_end_1 = std::chrono::steady_clock::now();
+  //std::cout << "Run aggregate for " << std::chrono::duration_cast<std::chrono::nanoseconds>(stage_end_1 - stage_begin_1).count() << "[ns]" << '\n';
+
+
+    /************* small integreted test **************/
+
+    // (1) Test the single-to-row-strip, single-to-col-strip, and then row-col-strip multiply, or col-row-strip multiply
+    if (whichTest == 10 || whichTest == 11) {
+	  stage_begin_1 = std::chrono::steady_clock::now();
+	  {
+    		const UseTemporaryAllocationBlock tempBlock{1024 * 1024 * 128};
+
+    		// make the computation
+    		Handle<Computation> readA = makeObject<ff::FFMatrixScanner>("ff", "input_batch");
+
+
+	    	Handle<Computation> selection = makeObject<ff::FFSingleToRow>(2);
+	    	selection->setInput(readA);
+
+	    	// make the writer
+	    	Handle<Computation> myWriter = makeObject<ff::FFMatrixWriter>("ff", "single_to_row_strip");
+	    	myWriter->setInput(selection);
+
+	    	// run the computation
+	    	bool success = pdbClient.executeComputations({myWriter});
+
+	    	// grab the iterator
+
+	    	std::cout << "write out the single-to-row-strip matrix: \n";
+
+	    	auto it2 = pdbClient.getSetIterator<ff::FFMatrixBlock>("ff", "single_to_row_strip");
+
+	    	write_out_block(it2);
+
+		}
+
+	{
+
+		const UseTemporaryAllocationBlock tempBlock{1024 * 1024 * 128};
+
+                // make the computation
+                Handle<Computation> readB = makeObject<ff::FFMatrixScanner>("ff", "w1");
+
+	    	Handle<Computation> selection = makeObject<ff::FFSingleToCol>(2);
+	    	selection->setInput(readB);
+
+	    	// make the writer
+	    	Handle<Computation> myWriter = makeObject<ff::FFMatrixWriter>("ff", "single_to_col_strip");
+	    	myWriter->setInput(selection);
+
+	    	// run the computation
+	    	bool success = pdbClient.executeComputations({myWriter});
+
+	    	// grab the iterator
+
+	    	std::cout << "write out the single-to-col-strip matrix: \n";
+
+	    	auto it2 = pdbClient.getSetIterator<ff::FFMatrixBlock>("ff", "single_to_col_strip");
+
+	    	write_out_block(it2);
+
+	}
+
+
+	  // test the row-strip x col-strip multiply
+	  if (whichTest == 10) {
+		  //{	
+
+		    stage_begin_1 = std::chrono::steady_clock::now();
+
+		    const UseTemporaryAllocationBlock tempBlock{1024 * 1024 * 128};
+
+		    // make the computation
+		    Handle<Computation> readA = makeObject<ff::FFMatrixScanner>("ff", "single_to_row_strip");
+		    Handle<Computation> readB = makeObject<ff::FFMatrixScanner>("ff", "single_to_col_strip");
+
+		    // make the join
+		    Handle<Computation> join = makeObject<ff::FFInputLayerJoin>();
+		    join->setInput(0, readA);
+		    join->setInput(1, readB);
+
+		    // make the writer
+		    Handle<Computation> myWriter = makeObject<ff::FFMatrixWriter>("ff", "row_col_multiply");
+		    myWriter->setInput(join);
+
+		    // run the computation
+		    bool success = pdbClient.executeComputations({myWriter});
+
+		  // grab the iterator
+
+		  std::cout << "write out the multiply matrix: \n";
+
+		  auto it2 = pdbClient.getSetIterator<ff::FFMatrixBlock>("ff", "row_col_multiply");
+
+		  write_out_block(it2);
+		  //}
+	  }
+
+	  // test the col-strip x row-strip multiply
+	  else if (whichTest == 11) {
+		  //{	
+		    stage_begin_1 = std::chrono::steady_clock::now();
+
+		    const UseTemporaryAllocationBlock tempBlock{1024 * 1024 * 128};
+
+		    // make the computation
+		    Handle<Computation> readA = makeObject<ff::FFMatrixScanner>("ff", "single_to_col_strip");
+		    Handle<Computation> readB = makeObject<ff::FFMatrixScanner>("ff", "single_to_row_strip");
+
+		    // make the join
+		    Handle<Computation> join = makeObject<ff::FFInputLayerJoin>();
+		    join->setInput(0, readA);
+		    join->setInput(1, readB);
+
+		    // make the aggregation
+            	    Handle<Computation> myAggregation = makeObject<ff::FFAggMatrix>();
+            	    myAggregation->setInput(join);
+
+		    // make the writer
+		    Handle<Computation> myWriter = makeObject<ff::FFMatrixWriter>("ff", "col_row_multiply");
+		    myWriter->setInput(myAggregation);
+
+		    // run the computation
+		    bool success = pdbClient.executeComputations({myWriter});
+
+		  // grab the iterator
+
+		  std::cout << "write out the multiply matrix: \n";
+
+		  auto it2 = pdbClient.getSetIterator<ff::FFMatrixBlock>("ff", "col_row_multiply");
+
+		  write_out_block(it2);
+		  //}
+	  }
+
+
+
+	/*
+		{
+	    std::cout << "write out the batch matrix: \n";
+
+    		auto it = pdbClient.getSetIterator<ff::FFMatrixBlock>("ff", "input_batch");
+
+    		write_out_block(it);
+		}
+
+	  // test the block x block multiply
+	  {
+	    const UseTemporaryAllocationBlock tempBlock{1024 * 1024 * 128};
+
+	    // make the computation
+	    Handle<Computation> readA = makeObject<ff::FFMatrixScanner>("ff", "row_col_multiply");
+	    Handle<Computation> readB = makeObject<ff::FFMatrixScanner>("ff", "input_batch");
+
+	    // make the join
+	    Handle<Computation> join = makeObject<ff::FFInputLayerJoin>();
+	    join->setInput(0, readA);
+	    join->setInput(1, readB);
+
+	    // make the aggregation
+    	    Handle<Computation> myAggregation = makeObject<ff::FFAggMatrix>();
+    	    myAggregation->setInput(join);
+
+	    // make the writer
+	    Handle<Computation> myWriter = makeObject<ff::FFMatrixWriter>("ff", "col_row_multiply");
+	    myWriter->setInput(myAggregation);
+
+	    // run the computation
+	    bool success = pdbClient.executeComputations({myWriter});
+
+	    // grab the iterator
+
+	    std::cout << "write out the multiply matrix: \n";
+
+	    auto it2 = pdbClient.getSetIterator<ff::FFMatrixBlock>("ff", "col_row_multiply");
+
+	    write_out_block(it2);
+
+	    //return 0;
+
+	  }
+	*/
+
+
+	    std::chrono::steady_clock::time_point stage_end_1 = std::chrono::steady_clock::now();
+	    std::cout << "Run multiply1 for " << std::chrono::duration_cast<std::chrono::nanoseconds>(stage_end_1 - stage_begin_1).count() << "[ns]" << '\n';
+
+	    pdbClient.removeSet("ff", "w1");
+	    pdbClient.removeSet("ff", "input_batch");
+	    pdbClient.removeSet("ff", "single_to_col_strip");
+	    pdbClient.removeSet("ff", "single_to_row_strip");
+	    if (whichTest == 10)
+	    	pdbClient.removeSet("ff", "row_col_multiply");
+	    else if (whichTest == 11)
+	    	pdbClient.removeSet("ff", "col_row_multiply");
+	    //else if (whichTest == 12)
+	    //	pdbClient.removeSet("ff", "block_block_multiply");
+
+	    return 0;
+    }
+
+    // do nothing
+    else {
+    	pdbClient.removeSet("ff", "w1");
+	return 0;
+    }
+
+    
+  // Test the row-aggregate
+  stage_begin_1 = std::chrono::steady_clock::now();
+  {
+
+    const UseTemporaryAllocationBlock tempBlock{1024 * 1024 * 128};
+
+    // make the computation
+    //Handle<Computation> readA = makeObject<ff::FFMatrixScanner>("ff", "input_batch");
+    Handle<Computation> readB = makeObject<ff::FFMatrixScanner>("ff", "w1");
+
+    // make the aggregation
+    Handle<Computation> myAggregation = makeObject<ff::FFAggBlockToRowStrip>();
+    myAggregation->setInput(readB);
+
+    // make the writer
+    Handle<Computation> myWriter = makeObject<ff::FFMatrixWriter>("ff", "agg_block_strip");
+    myWriter->setInput(myAggregation);
+
+    // run the computation
+    bool success = pdbClient.executeComputations({myWriter});
+
+    // grab the iterator
+
+
+    std::cout << "write out the row-aggregated matrix: \n";
+
+    auto it2 = pdbClient.getSetIterator<ff::FFMatrixBlock>("ff", "agg_block_strip");
+
+    write_out_block(it2);
+  }
+
+
+
+  // Test the col-aggregate
+  stage_begin_1 = std::chrono::steady_clock::now();
+  {
+    const UseTemporaryAllocationBlock tempBlock{1024 * 1024 * 128};
+
+    // make the computation
+    //Handle<Computation> readA = makeObject<ff::FFMatrixScanner>("ff", "input_batch");
+    Handle<Computation> readB = makeObject<ff::FFMatrixScanner>("ff", "w1");
+
+    // make the aggregation
+    Handle<Computation> myAggregation = makeObject<ff::FFAggBlockToColStrip>();
+    myAggregation->setInput(readB);
+
+    // make the writer
+    Handle<Computation> myWriter = makeObject<ff::FFMatrixWriter>("ff", "agg_block_strip_to_col");
+    myWriter->setInput(myAggregation);
+
+    // run the computation
+    bool success = pdbClient.executeComputations({myWriter});
+
+  // grab the iterator
+
+
+  std::cout << "write out the col-aggregated matrix: \n";
+
+  auto it2 = pdbClient.getSetIterator<ff::FFMatrixBlock>("ff", "agg_block_strip_to_col");
+
+  write_out_block(it2);
+
+//  return 0;
+
+  }
+  stage_end_1 = std::chrono::steady_clock::now();
+  std::cout << "Run aggregate for " << std::chrono::duration_cast<std::chrono::nanoseconds>(stage_end_1 - stage_begin_1).count() << "[ns]" << '\n';
+
+/*
+  // test the row-strip x col-strip multiply
+  stage_begin_1 = std::chrono::steady_clock::now();
+  {
+    const UseTemporaryAllocationBlock tempBlock{1024 * 1024 * 128};
+
+    // make the computation
+    Handle<Computation> readA = makeObject<ff::FFMatrixScanner>("ff", "agg_block_strip");
+    Handle<Computation> readB = makeObject<ff::FFMatrixScanner>("ff", "agg_block_strip_to_col");
+
+    // make the join
+    Handle<Computation> join = makeObject<ff::FFInputLayerJoin>();
+    join->setInput(0, readA);
+    join->setInput(1, readB);
+
+    // make the writer
+    Handle<Computation> myWriter = makeObject<ff::FFMatrixWriter>("ff", "row_col_multiply");
+    myWriter->setInput(join);
+
+    // run the computation
+    bool success = pdbClient.executeComputations({myWriter});
+
+  // grab the iterator
+
+  std::cout << "write out the multiply matrix: \n";
+
+  auto it2 = pdbClient.getSetIterator<ff::FFMatrixBlock>("ff", "row_col_multiply");
+
+  write_out_block(it2);
+
+  return 0;
+
+  }
+  stage_end_1 = std::chrono::steady_clock::now();
+  std::cout << "Run aggregate for " << std::chrono::duration_cast<std::chrono::nanoseconds>(stage_end_1 - stage_begin_1).count() << "[ns]" << '\n';
+*/
+
+  // test the row-strip x col-strip multiply
+  stage_begin_1 = std::chrono::steady_clock::now();
+  {
+    const UseTemporaryAllocationBlock tempBlock{1024 * 1024 * 128};
+
+    // make the computation
+    Handle<Computation> readA = makeObject<ff::FFMatrixScanner>("ff", "agg_block_strip_to_col");
+    Handle<Computation> readB = makeObject<ff::FFMatrixScanner>("ff", "agg_block_strip");
+
+    // make the join
+    Handle<Computation> join = makeObject<ff::FFInputLayerJoin>();
+    join->setInput(0, readA);
+    join->setInput(1, readB);
+
+    // make the aggregation
+    Handle<Computation> myAggregation = makeObject<ff::FFAggMatrix>();
+    myAggregation->setInput(join);
+
+    // make the writer
+    Handle<Computation> myWriter = makeObject<ff::FFMatrixWriter>("ff", "col_row_multiply");
+    myWriter->setInput(myAggregation);
+    //myWriter->setInput(join);
+
+    // run the computation
+    bool success = pdbClient.executeComputations({myWriter});
+
+  // grab the iterator
+
+  std::cout << "write out the multiply matrix: \n";
+
+  auto it2 = pdbClient.getSetIterator<ff::FFMatrixBlock>("ff", "col_row_multiply");
+
+  write_out_block(it2);
+
+  return 0;
+
+  }
+  stage_end_1 = std::chrono::steady_clock::now();
+  std::cout << "Run aggregate for " << std::chrono::duration_cast<std::chrono::nanoseconds>(stage_end_1 - stage_begin_1).count() << "[ns]" << '\n';
+
+
+
+
 
   // do the activation of the first layer
   std::chrono::steady_clock::time_point stage_begin = std::chrono::steady_clock::now();

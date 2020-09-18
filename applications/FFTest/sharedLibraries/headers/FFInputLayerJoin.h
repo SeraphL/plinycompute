@@ -63,6 +63,19 @@ class FFInputLayerJoin : public JoinComp <FFInputLayerJoin, FFMatrixBlock, FFMat
         }
       }
 
+      std::cout<< "in join, before debug: \n";
+      std::cout << "rowID: " << out->rowID <<"\n";
+      std::cout << "colID: " << out->colID <<"\n";
+
+	// debug
+	if (out->rowID < 0) out->rowID = 0;
+	if (out->colID < 0) out->colID = 0;
+
+      std::cout<< "in join, after debug: \n";
+      std::cout << "rowID: " << out->rowID <<"\n";
+      std::cout << "colID: " << out->colID <<"\n";
+
+
       // return the output
       return out;
     });
